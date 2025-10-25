@@ -1,0 +1,10 @@
+streamlit
+tensorflow
+numpy
+pandas
+Pillow
+requests
+fastapi
+uvicorn
+python-multipart
+opencv-python-headless # For stable image processing (cv2)
