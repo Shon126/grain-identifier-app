@@ -1,16 +1,14 @@
 import streamlit as st
-import numpy as np
+import requests
+import json
 from PIL import Image
 from io import BytesIO
-import requests
-import os 
+import os
 
-# --- 1. CONFIGURATION and API SETUP ---
-# For local testing, keep this as localhost:8000
-# FOR FINAL DEPLOYMENT, CHANGE THIS TO YOUR CLOUD SERVER URL (e.g., https://my-grain-api.com/predict)
+# --- 1. CONFIGURATION ---
+# 🛑 CRITICAL: This URL MUST match your live Render endpoint URL.
 API_URL = "https://grain-classifier-api.onrender.com/predict" 
 
-# Nutritional and Use Information Lookup Table (CLEANED keys)
 GRAIN_INFO = {
     "Bajra": {"Protein (g)": "11.0", "Calories (per 100g)": "378", "Uses": "Flour for flatbreads (rotis), porridge, animal feed. Highly drought-resistant."},
     "Barley": {"Protein (g)": "12.5", "Calories (per 100g)": "352", "Uses": "Brewing (malt), soups, stews, animal fodder. Excellent source of fiber."},
@@ -25,25 +23,23 @@ GRAIN_INFO = {
     "Wheat": {"Protein (g)": "13.0", "Calories (per 100g)": "340", "Uses": "Flour for bread, pasta, cakes, and other baked goods. Most widely grown crop."},
 }
 
-
-# --- 2. INFERENCE FUNCTION (API CALL) ---
-def predict_via_api(image_bytes):
-    """Sends image bytes to the FastAPI backend and retrieves prediction."""
-    files = {"file": ("image.jpg", image_bytes, "image/jpeg")}
+# --- 2. INFERENCE CALL ---
+def call_api_predict(uploaded_file):
+    """Sends the image to the FastAPI server for prediction."""
+    
+    # Reset file pointer and convert to bytes
+    files = {'file': (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
     
     try:
-        # Check for placeholder API URL
-        if 'localhost' not in API_URL and '127.0.0.1' not in API_URL:
-            st.warning("Ensure your API server is running and the public URL is correct.")
-            
         response = requests.post(API_URL, files=files)
-        response.raise_for_status()  # Raise exception for 4xx or 5xx status codes
+        response.raise_for_status() # Raise exception for 4XX or 5XX errors
         return response.json()
-    except requests.exceptions.ConnectionError:
-        st.error(f"API Connection Error. Ensure the FastAPI server is running in a separate terminal.")
+    except requests.exceptions.HTTPError as e:
+        st.error(f"API Error: The server could not process the request. Status Code: {e.response.status_code}")
+        st.warning("Ensure the Render API is live and the model file is accessible.")
         return None
-    except Exception as e:
-        st.error(f"API Error: {e}")
+    except requests.exceptions.ConnectionError:
+        st.error("API Connection Error. Ensure the FastAPI server is running and the URL is correct.")
         return None
 
 
@@ -54,9 +50,9 @@ st.title("🌾 AI Grain Identifier")
 
 st.markdown("""
 ### 📸 Photo Instructions (Crucial for 95% Accuracy!)
-1. *Place only ONE grain* on a *clean, white paper.*
-2. *Center the grain* in the middle of the frame (this replicates the model's training 'zoom').
-3. Ensure *bright, even lighting* (e.g., natural daylight).
+1. **Place only ONE grain** on a **clean, white paper.**
+2. **Center the grain** in the middle of the frame.
+3. Ensure **bright, even lighting**.
 """)
 
 uploaded_file = st.file_uploader(
@@ -65,61 +61,52 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    try:
-        # Load image locally for display
-        img = Image.open(uploaded_file)
-        
-        # Convert image to bytes for API transmission
-        img_byte_arr = BytesIO()
-        img.save(img_byte_arr, format='JPEG')
-        image_bytes = img_byte_arr.getvalue()
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.image(img, caption="Uploaded Image", use_column_width=True)
+    # Read image using PIL for display
+    img = Image.open(uploaded_file)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.image(img, caption="Uploaded Image", use_column_width=True)
 
-        # --- PREDICT ---
-        with st.spinner("Sending image to server and analyzing features..."):
-            api_result = predict_via_api(image_bytes)
+    # --- PREDICT ---
+    with st.spinner("Analyzing grain features..."):
+        result = call_api_predict(uploaded_file)
+
+    if result:
+        # Prediction result structure is guaranteed by the API
+        predicted_class = result['prediction']
+        confidence = result['confidence']
+        top_results = result['top_results']
+        
+        # Use the confidence score to determine color
+        if confidence > 0.90:
+            result_type = "success"
+        elif confidence > 0.75:
+            result_type = "warning"
+        else:
+            result_type = "error"
 
         # --- DISPLAY RESULTS ---
-        if api_result and 'prediction' in api_result:
-            clean_class_name = api_result['prediction']
-            confidence = api_result['confidence']
-            
-            if confidence > 0.90:
-                status_emoji = "⭐"
-            elif confidence > 0.75:
-                status_emoji = "⚠"
-            else:
-                status_emoji = "❌"
+        with col2:
+            st.header("🔍 Classification Result")
+            st.markdown(f"**Predicted Grain:** <span style='font-size: 28px; color: {'green' if result_type == 'success' else 'orange'};'>{predicted_class}</span>", unsafe_allow_html=True)
+            st.metric("Confidence", f"{confidence * 100:.2f}%")
 
-            with col2:
-                st.header("🔍 Classification Result")
-                st.markdown(f"""
-                    *Predicted Grain:* <span style='font-size: 28px; color: {'green' if confidence > 0.75 else 'red'};'>
-                    {clean_class_name} {status_emoji}
-                    </span>
-                    """, unsafe_allow_html=True)
-                st.metric("Confidence", f"{confidence * 100:.2f}%")
-
-                if clean_class_name in GRAIN_INFO:
-                    info = GRAIN_INFO[clean_class_name]
-                    st.subheader("🌾 Nutritional Summary")
-                    
-                    metric_cols = st.columns(2)
-                    metric_cols[0].metric("Protein", f"{info['Protein (g)']} g")
-                    metric_cols[1].metric("Calories", f"{info['Calories (per 100g)']}")
-                    
-                    st.subheader("💡 Common Uses")
-                    st.markdown(info['Uses'])
+            if predicted_class in GRAIN_INFO:
+                info = GRAIN_INFO[predicted_class]
+                st.subheader("🌾 Nutritional Summary")
                 
-                # Display Top Guesses
-                st.subheader("Top Guesses")
-                for item in api_result.get('top_results', []):
-                    st.text(f"  - {item['class']}: {item['confidence'] * 100:.2f}%")
-
-        
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+                metric_cols = st.columns(2)
+                metric_cols[0].metric("Protein", f"{info['Protein (g)']} g")
+                metric_cols[1].metric("Calories", f"{info['Calories (per 100g)']}")
+                
+                st.subheader("💡 Common Uses")
+                st.markdown(info['Uses'])
+            else:
+                st.warning(f"Nutritional data for '{predicted_class}' is missing.")
+            
+            # Display Top 3 probabilities
+            st.subheader("Top Guesses")
+            for res in top_results:
+                st.text(f"{res['class']}: {res['confidence'] * 100:.2f}%")
