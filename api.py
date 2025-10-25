@@ -1,11 +1,12 @@
 import os
 import numpy as np
 import tensorflow as tf
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1' # 🛑 CRITICAL FIX: DISABLE GPU
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from io import BytesIO
 import uvicorn
-import cv2 # CRUCIAL IMPORT FOR RELIABLE IMAGE DECODING
+import cv2 
 from PIL import Image
 
 # --- CONFIGURATION (Must match training) ---
@@ -20,20 +21,19 @@ model = None
 # --- Model Loading (Runs only once at startup) ---
 @app.on_event("startup")
 async def load_model():
-    """Load the Keras model directly."""
+    """Load the Keras model directly on the CPU."""
     global model
     try:
         if not os.path.exists(MODEL_PATH):
-            print(f"Error: Model file not found at {MODEL_PATH}")
-            # If the model is not found (e.g., LFS download failed), raise error
             raise RuntimeError("Model file not found. Check Git LFS status.")
             
+        # Loads on CPU due to CUDA_VISIBLE_DEVICES='-1'
         model = tf.keras.models.load_model(MODEL_PATH, compile=False)
         model.compile(loss='categorical_crossentropy', metrics=['accuracy'])
-        print("Keras Model loaded successfully.")
+        print("Keras Model loaded successfully on CPU.")
     except Exception as e:
         print(f"FATAL ERROR loading Keras model: {e}")
-        raise RuntimeError("Could not initialize Keras model.")
+        raise RuntimeError(f"Could not initialize Keras model. Error: {e}")
 
 
 # --- CRITICAL PREPROCESSING FUNCTION ---
@@ -47,7 +47,7 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     if img_bgr is None:
         raise ValueError("Could not decode image bytes using OpenCV.")
     
-    # Convert BGR (OpenCV default) to RGB
+    # Convert BGR to RGB
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     
     # 2. Convert to TensorFlow float32 tensor
@@ -57,7 +57,7 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     cropped_img = tf.image.central_crop(img_tensor, central_fraction=CROP_FACTOR)
     resized_img = tf.image.resize(cropped_img, IMAGE_SIZE, method=tf.image.ResizeMethod.BILINEAR)
 
-    # 4. Normalization to [-1, 1] range (MobileNetV2 expectation)
+    # 4. Normalization to [-1, 1] range (Model expectation)
     normalized_tensor = (resized_img / 127.5) - 1.0
 
     # 5. Add Batch Dimension [1, H, W, C]
@@ -78,7 +78,7 @@ async def predict_grain(file: UploadFile = File(...)):
         # Step 1: Preprocess the input image using the robust OpenCV pipeline
         input_tensor = preprocess_image(image_bytes)
         
-        # Step 2: Run Keras prediction directly
+        # Step 2: Run prediction
         predictions = model.predict(input_tensor, verbose=0)[0]
         probabilities = tf.nn.softmax(predictions).numpy()
         
@@ -89,7 +89,7 @@ async def predict_grain(file: UploadFile = File(...)):
         results = []
         for i in top_k_indices:
             results.append({
-                "class": CLASS_NAMES[i].strip(), # Strip whitespace for clean API output
+                "class": CLASS_NAMES[i].strip(),
                 "confidence": float(probabilities[i])
             })
             
@@ -100,7 +100,6 @@ async def predict_grain(file: UploadFile = File(...)):
         })
         
     except ValueError as ve:
-        # Catch image decoding errors specifically
         raise HTTPException(status_code=400, detail=f"Invalid image format or decoding error: {ve}")
     except Exception as e:
         print(f"Prediction Error: {e}")
