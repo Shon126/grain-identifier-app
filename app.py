@@ -8,7 +8,7 @@ import os
 # --- 1. CONFIGURATION and API SETUP ---
 # For local testing, keep this as localhost:8000
 # FOR FINAL DEPLOYMENT, CHANGE THIS TO YOUR CLOUD SERVER URL (e.g., https://my-grain-api.com/predict)
-API_URL = "https://grain-classifier-api.onrender.com" 
+API_URL = "https://grain-classifier-api.onrender.com/predict" 
 
 # Nutritional and Use Information Lookup Table (CLEANED keys)
 GRAIN_INFO = {
